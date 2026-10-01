@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hourly background job: pulls new chess.com games and analyzes them (only when plugged in) -->
+  <key>Label</key>
+  <string>com.godlike7105.chessdb</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/tanishqjadhav/Projects/chess-db/venv/bin/python</string>
+    <string>-u</string>
+    <string>update.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/tanishqjadhav/Projects/chess-db</string>
+
+  <!-- run every hour (3600 seconds), and once when it's loaded -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- so it can find stockfish (Homebrew) and pmset -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- run gently in the background -->
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/tanishqjadhav/Projects/chess-db/data/update.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/tanishqjadhav/Projects/chess-db/data/update.log</string>
+</dict>
+</plist>

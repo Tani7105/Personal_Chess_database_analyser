@@ -15,6 +15,7 @@ import chess.pgn
 from flask import Flask, jsonify, request, send_from_directory
 
 from blunders import win_pct, classify, CAP
+import update
 
 DB_PATH = "data/chess.db"
 ENGINE_PATH = "stockfish"
@@ -164,6 +165,47 @@ def analyze():
                       "first_uci": pv[0].uci(),
                       "san": board.variation_san(pv)})
     return jsonify({"lines": lines})
+
+
+# ---------- Syncing new games from chess.com ----------
+sync_state = {"running": False, "message": ""}
+sync_state_lock = threading.Lock()
+
+
+def background_analysis():
+    def log(msg):
+        sync_state["message"] = msg
+    try:
+        update.analyze_recent(threads=1, log=log)
+    except update.Busy:
+        log("Analysis is already running in another window")
+    except Exception as e:
+        log(f"Analysis failed: {e}")
+    finally:
+        sync_state["running"] = False
+
+
+@app.route("/api/sync", methods=["POST"])
+def sync_games():
+    try:
+        new_ids = update.pull_new_games()
+    except update.Busy:
+        return jsonify({"new": 0, "busy": True})
+    except update.requests.RequestException:
+        return jsonify({"error": "Could not reach chess.com. Check your internet connection."}), 502
+    except Exception as e:
+        return jsonify({"error": f"Sync failed: {e}"}), 500
+
+    with sync_state_lock:
+        if not sync_state["running"]:
+            sync_state.update(running=True, message="Checking for games to analyze...")
+            threading.Thread(target=background_analysis, daemon=True).start()
+    return jsonify({"new": len(new_ids)})
+
+
+@app.route("/api/sync/status")
+def sync_status():
+    return jsonify(sync_state)
 
 
 if __name__ == "__main__":
