@@ -4,7 +4,7 @@ import chess
 import chess.engine
 
 DB_PATH = "data/chess.db"
-TIME_PER_POSITION = 0.1  # seconds; raise for stronger analysis
+TIME_PER_POSITION = 0.3  # seconds; raise for stronger analysis
 
 def analyze_games(limit):
     conn = sqlite3.connect(DB_PATH)
