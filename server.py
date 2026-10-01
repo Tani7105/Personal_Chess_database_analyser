@@ -5,6 +5,7 @@ Run with:  python server.py   then open http://localhost:5050
 """
 import atexit
 import io
+import math
 import sqlite3
 import threading
 
@@ -38,22 +39,57 @@ def clamp(cp):
     return max(-CAP, min(CAP, cp))
 
 
-def find_flags(rows, my_color):
-    """Same scoring as blunders.py. Returns a list of flagged moves (0-based move index)."""
-    sign = 1 if my_color == "white" else -1
-    my_parity = 1 if my_color == "white" else 0
-    flags = []
-    for k in range(len(rows) - 1):
-        ply, played, best, ev = rows[k]
-        ev_after = rows[k + 1][3]
-        if ply % 2 != my_parity or played == best or ev is None or ev_after is None:
+def move_label(drop, played, best):
+    """chess.com-style label for one move. drop = % win chance lost by the mover."""
+    if played == best:
+        return "Best"
+    if drop < 2:
+        return "Excellent"
+    if drop < 10:
+        return "Good"
+    return classify(drop).capitalize()  # Inaccuracy / Mistake / Blunder
+
+
+def move_accuracy(drop):
+    """Lichess per-move accuracy: 100 for a perfect move, falling as win chance is lost."""
+    return max(0.0, min(100.0, 103.1668 * math.exp(-0.04354 * drop) - 3.1669))
+
+
+def review_moves(rows):
+    """One review per move (or None if that move hasn't been analyzed)."""
+    reviews = []
+    for k, (ply, played, best, ev) in enumerate(rows):
+        if ev is None or best is None:
+            reviews.append(None)
             continue
-        drop = sign * (win_pct(clamp(ev)) - win_pct(clamp(ev_after)))
-        label = classify(drop)
-        if label:
-            flags.append({"index": k, "label": label, "drop": round(drop),
-                          "played": played, "best": best})
-    return flags
+        ev_after = rows[k + 1][3] if k + 1 < len(rows) else None
+        if ev_after is None:
+            # last move of the game: no position after it to compare with
+            reviews.append({"label": "Best" if played == best else None,
+                            "drop": 0, "played": played, "best": best,
+                            "accuracy": None})
+            continue
+        sign = 1 if ply % 2 == 1 else -1  # who made this move: White on odd plies
+        drop = max(0.0, sign * (win_pct(clamp(ev)) - win_pct(clamp(ev_after))))
+        reviews.append({"label": move_label(drop, played, best),
+                        "drop": round(drop), "played": played, "best": best,
+                        "accuracy": move_accuracy(drop)})
+    return reviews
+
+
+def summarize(reviews):
+    """Counts of each label and average accuracy, for White and Black."""
+    summary = {}
+    for color, parity in (("white", 0), ("black", 1)):
+        mine = [r for i, r in enumerate(reviews) if r and i % 2 == parity]
+        counts = {}
+        for r in mine:
+            if r["label"]:
+                counts[r["label"]] = counts.get(r["label"], 0) + 1
+        accs = [r["accuracy"] for r in mine if r["accuracy"] is not None]
+        summary[color] = {"counts": counts,
+                          "accuracy": round(sum(accs) / len(accs), 1) if accs else None}
+    return summary
 
 
 @app.route("/")
@@ -96,10 +132,11 @@ def get_game(game_id):
                       "to": chess.square_name(move.to_square),
                       "fen": board.fen()})
 
+    reviews = review_moves(rows)
     return jsonify({"date": date, "white": white, "black": black,
                     "my_color": my_color, "result": result, "opening": opening,
                     "start_fen": start_fen, "moves": moves,
-                    "flags": find_flags(rows, my_color)})
+                    "reviews": reviews, "summary": summarize(reviews)})
 
 
 @app.route("/api/analyze", methods=["POST"])

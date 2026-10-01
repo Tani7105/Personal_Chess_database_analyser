@@ -50,13 +50,27 @@
   .mv { cursor: pointer; padding: 2px 5px; border-radius: 3px; }
   .mv:hover { background: var(--panel2); }
   .mv.current { background: #5a5754; }
-  .mv.BLUNDER { color: var(--blunder); font-weight: bold; }
+  .mv.Best { color: #81b64c; }
+  .mv.Blunder { color: var(--blunder); font-weight: bold; }
   .mv.Mistake { color: var(--mistake); font-weight: bold; }
   .mv.Inaccuracy { color: var(--inaccuracy); }
-  .flag { padding: 8px 10px; border-radius: 6px; margin-top: 8px; font-size: 14px; }
-  .flag.BLUNDER { background: rgba(224, 82, 82, .2); }
-  .flag.Mistake { background: rgba(232, 163, 61, .2); }
-  .flag.Inaccuracy { background: rgba(214, 195, 90, .2); }
+  .sym { font-size: 11px; margin-left: 1px; }
+  .review { display: flex; gap: 10px; align-items: flex-start; padding: 10px;
+            border-radius: 6px; margin-top: 8px; font-size: 15px; background: var(--panel2); }
+  .badge { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid;
+           place-items: center; font-weight: bold; font-size: 13px; color: #fff; }
+  .badge.Best { background: #81b64c; }
+  .badge.Excellent { background: #96bc4b; }
+  .badge.Good { background: #6f9a5a; }
+  .badge.Inaccuracy { background: #d4b232; }
+  .badge.Mistake { background: #e58f2a; }
+  .badge.Blunder { background: #ca3431; }
+  .review button { margin-top: 8px; flex: none; padding: 6px 10px; }
+  table.summary { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.summary th, table.summary td { padding: 4px 6px; text-align: center; }
+  table.summary th:first-child, table.summary td:first-child { text-align: left; }
+  table.summary th { color: var(--muted); font-weight: normal; }
+  #summaryBox { display: none; }
   #variationBox { display: none; }
   .hl-last { background-color: rgba(246, 246, 105, .55) !important; }
   .hl-best { box-shadow: inset 0 0 0 4px var(--accent); }
@@ -88,7 +102,12 @@
     <div class="card">
       <h2 id="gameTitle">Free analysis</h2>
       <div id="status" class="muted"></div>
-      <div id="flagBox"></div>
+      <div id="reviewBox"></div>
+    </div>
+
+    <div class="card" id="summaryBox">
+      <h2>Game review</h2>
+      <div id="summary"></div>
     </div>
 
     <div class="card" id="variationBox">
@@ -121,7 +140,10 @@ let gameData = null;   // the loaded game from the database (null = free analysi
 let fens = [START_FEN]; // fens[i] = position after i game moves
 let ply = 0;           // how many game moves have been played on the board
 let variation = [];    // your own moves played on top of the game position
-let flagsByMove = {};  // move index -> flag info
+let reviews = [];      // reviews[i] = verdict on game move i (from the server)
+const LABELS = ['Best', 'Excellent', 'Good', 'Inaccuracy', 'Mistake', 'Blunder'];
+const SYMBOLS = { Best: '\u2605', Excellent: '!', Good: '\u2713',
+                  Inaccuracy: '?!', Mistake: '?', Blunder: '??' };
 let analysisId = 0;
 let analysisTimer = null;
 
@@ -155,7 +177,7 @@ async function loadGames() {
 async function loadGame(id) {
   variation = [];
   ply = 0;
-  flagsByMove = {};
+  reviews = [];
   if (!id) {
     gameData = null;
     fens = [START_FEN];
@@ -164,11 +186,39 @@ async function loadGame(id) {
   } else {
     gameData = await (await fetch('/api/game/' + id)).json();
     fens = [gameData.start_fen].concat(gameData.moves.map(m => m.fen));
-    gameData.flags.forEach(f => { flagsByMove[f.index] = f; });
+    reviews = gameData.reviews;
     board.orientation(gameData.my_color);
     $('#gameTitle').text(`${gameData.white} vs ${gameData.black}`);
   }
   renderMoveList();
+  renderSummary();
+  update();
+}
+
+function renderSummary() {
+  const hasReview = gameData && reviews.some(r => r && r.label);
+  if (!hasReview) { $('#summaryBox').hide(); return; }
+  const w = gameData.summary.white, b = gameData.summary.black;
+  const you = c => gameData.my_color === c ? ' (you)' : '';
+  const acc = a => a === null ? '-' : a.toFixed(1);
+  let rows = `<tr><th></th><th>${gameData.white}${you('white')}</th><th>${gameData.black}${you('black')}</th></tr>`;
+  rows += `<tr><td>Accuracy</td><td><b>${acc(w.accuracy)}</b></td><td><b>${acc(b.accuracy)}</b></td></tr>`;
+  LABELS.forEach(l => {
+    rows += `<tr><td><span class="badge ${l}" style="display:inline-grid;width:20px;height:20px;font-size:10px;margin-right:6px">${SYMBOLS[l]}</span>${l}</td>`
+          + `<td>${w.counts[l] || 0}</td><td>${b.counts[l] || 0}</td></tr>`;
+  });
+  $('#summary').html(`<table class="summary">${rows}</table>`);
+  $('#summaryBox').show();
+}
+
+function showBest() {
+  const r = reviews[ply - 1];
+  if (!r) return;
+  ply--;
+  variation = [];
+  const g = new Chess(fens[ply]);
+  const mv = g.move(r.best);
+  if (mv) variation.push({ san: mv.san, from: mv.from, to: mv.to, fen: g.fen() });
   update();
 }
 
@@ -221,8 +271,10 @@ function renderMoveList() {
   if (!gameData) { $('#moves').html('<span class="muted">Drag a piece to start analyzing.</span>'); return; }
   const html = gameData.moves.map((m, i) => {
     const num = i % 2 === 0 ? `<span class="num">${i / 2 + 1}.</span>` : '';
-    const flag = flagsByMove[i] ? flagsByMove[i].label : '';
-    return `${num}<span class="mv ${flag}" data-ply="${i + 1}" onclick="jumpTo(${i + 1})">${m.san}</span>`;
+    const label = reviews[i] && reviews[i].label ? reviews[i].label : '';
+    const sym = ['Inaccuracy', 'Mistake', 'Blunder', 'Best'].includes(label)
+      ? `<span class="sym">${SYMBOLS[label]}</span>` : '';
+    return `${num}<span class="mv ${label}" data-ply="${i + 1}" onclick="jumpTo(${i + 1})">${m.san}${sym}</span>`;
   });
   $('#moves').html(html.join(' '));
 }
@@ -249,12 +301,8 @@ function update(fromDrag) {
   if (gameData) status += ` | ${gameData.date} | ${gameData.opening || ''} | Result ${gameData.result}`;
   $('#status').text(status);
 
-  // was the move that led here flagged?
-  const flag = !variation.length && ply > 0 ? flagsByMove[ply - 1] : null;
-  $('#flagBox').html(flag
-    ? `<div class="flag ${flag.label}"><b>${flag.played}</b> was a ${flag.label.toLowerCase()} `
-      + `(lost ${flag.drop}% win chance). Best was <b>${flag.best}</b>.</div>`
-    : '');
+  // verdict on the move that led to this position
+  $('#reviewBox').html(!variation.length && ply > 0 && gameData ? reviewHtml(ply - 1) : '');
 
   // your line
   if (variation.length) {
@@ -267,6 +315,31 @@ function update(fromDrag) {
   // ask the engine (short delay so fast clicking doesn't queue up requests)
   clearTimeout(analysisTimer);
   analysisTimer = setTimeout(requestAnalysis, 250);
+}
+
+function reviewHtml(i) {
+  const r = reviews[i];
+  const move = gameData.moves[i].san;
+  const mover = i % 2 === 0 ? 'white' : 'black';
+  const who = mover === gameData.my_color ? 'You' : 'Opponent';
+  if (!r) return `<div class="review"><div>${who} played <b>${move}</b>. `
+    + `<span class="muted">This game hasn't been analyzed yet.</span></div></div>`;
+  if (!r.label) return `<div class="review"><div>${who} played <b>${move}</b>, the final move.</div></div>`;
+
+  let text;
+  if (r.label === 'Best') {
+    text = `<b>${move}</b> is the best move.`;
+  } else {
+    const lost = r.drop >= 10 ? ` It lost ${r.drop}% win chance.` : '';
+    const verdict = ['Excellent', 'Good'].includes(r.label)
+      ? r.label.toLowerCase()
+      : (r.label === 'Inaccuracy' ? 'an inaccuracy' : 'a ' + r.label.toLowerCase());
+    text = `<b>${move}</b> is ${verdict}.${lost} `
+         + `The best move was <b>${r.best}</b>.`
+         + `<br><button onclick="showBest()">Show best move</button>`;
+  }
+  return `<div class="review"><span class="badge ${r.label}">${SYMBOLS[r.label]}</span>`
+       + `<div><span class="muted">${who}</span><br>${text}</div></div>`;
 }
 
 async function requestAnalysis() {
