@@ -32,10 +32,59 @@ ENGINE_THREADS = max(1, (os.cpu_count() or 4) - 2)
 ENGINE_HASH_MB = 256
 
 app = Flask(__name__, static_folder="static")
-engine = chess.engine.SimpleEngine.popen_uci(ENGINE_PATH)
-engine.configure({"Threads": ENGINE_THREADS, "Hash": ENGINE_HASH_MB})
+# Stockfish starts the first time you analyze something and shuts down after
+# ENGINE_IDLE_SECONDS without use, so the server costs almost nothing while idle.
+ENGINE_IDLE_SECONDS = 600
 engine_lock = threading.Lock()  # one engine, so one analysis at a time
-atexit.register(engine.quit)
+_engine = None
+_engine_last_used = 0.0
+
+
+def get_engine():
+    """The running engine, started if needed. Call while holding engine_lock."""
+    global _engine, _engine_last_used
+    if _engine is not None and _engine.protocol.returncode.done():
+        _engine = None  # Stockfish crashed or was killed; start a fresh one
+    if _engine is None:
+        _engine = chess.engine.SimpleEngine.popen_uci(ENGINE_PATH)
+        _engine.configure({"Threads": ENGINE_THREADS, "Hash": ENGINE_HASH_MB})
+        print("Engine started", flush=True)
+    _engine_last_used = time.monotonic()
+    return _engine
+
+
+def engine_done():
+    """Call when a search ends (still holding engine_lock)."""
+    global _engine_last_used
+    _engine_last_used = time.monotonic()
+
+
+def _quit_engine():
+    global _engine
+    if _engine is not None:
+        try:
+            _engine.quit()
+        except Exception:
+            pass
+        _engine = None
+        print("Engine stopped (idle)", flush=True)
+
+
+def _idle_watcher():
+    while True:
+        time.sleep(min(30, ENGINE_IDLE_SECONDS / 4))
+        if _engine is None or time.monotonic() - _engine_last_used < ENGINE_IDLE_SECONDS:
+            continue
+        if engine_lock.acquire(blocking=False):  # never stop it in the middle of a search
+            try:
+                if time.monotonic() - _engine_last_used >= ENGINE_IDLE_SECONDS:
+                    _quit_engine()
+            finally:
+                engine_lock.release()
+
+
+threading.Thread(target=_idle_watcher, daemon=True).start()
+atexit.register(_quit_engine)
 
 
 def db():
@@ -139,7 +188,7 @@ def analyze_stream():
         with engine_lock:  # wait for the previous search to wind down (milliseconds)
             if my_gen != live["generation"]:
                 return  # you already moved on to another position
-            analysis = engine.analysis(
+            analysis = get_engine().analysis(
                 board, chess.engine.Limit(depth=LIVE_MAX_DEPTH, time=LIVE_MAX_SECONDS),
                 multipv=NUM_LINES)
             with live_lock:
@@ -164,6 +213,7 @@ def analyze_stream():
                     yield f"data: {json.dumps({'lines': payload, 'depth': lines[1]['depth'], 'done': True})}\n\n"
             finally:
                 analysis.stop()
+                engine_done()
                 with live_lock:
                     if live["analysis"] is analysis:
                         live["analysis"] = None
@@ -184,8 +234,9 @@ def analyze():
         return jsonify({"lines": [], "game_over": board.result()})
 
     with engine_lock:
-        infos = engine.analyse(board, chess.engine.Limit(time=ANALYSIS_TIME),
-                               multipv=NUM_LINES)
+        infos = get_engine().analyse(board, chess.engine.Limit(time=ANALYSIS_TIME),
+                                     multipv=NUM_LINES)
+        engine_done()
 
     lines = []
     for info in infos:
