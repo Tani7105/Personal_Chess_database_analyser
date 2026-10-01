@@ -48,20 +48,146 @@ const cg = Chessground($('#board'), {
   premovable: { enabled: false },
   highlight: { lastMove: true, check: true },
   movable: { free: false, showDests: true, events: { after: onBoardMove } },
-  drawable: {
-    enabled: true,
-    brushes: {
-      engine: { key: 'e', color: '#3b82c4', opacity: 0.8, lineWidth: 12 },
-      engineHover: { key: 'eh', color: '#3b82c4', opacity: 0.45, lineWidth: 12 },
-      green: { key: 'g', color: '#15781B', opacity: 1, lineWidth: 10 },
-      red: { key: 'r', color: '#882020', opacity: 1, lineWidth: 10 },
-      blue: { key: 'b', color: '#003088', opacity: 1, lineWidth: 10 },
-      yellow: { key: 'y', color: '#e68f00', opacity: 1, lineWidth: 10 },
-    },
-    onChange: shapes => { if (cur) cur.shapes = shapes; },
-  },
+  drawable: { enabled: false, visible: false },  // we draw our own arrows below
 });
 window.addEventListener('resize', () => cg.redrawAll());
+
+// ---------- Arrows and square highlights (chess.com style) ----------
+// Drawn in our own SVG layer on top of the board, 100 units per square.
+const COLORS = {
+  orange: '#ffaa00', green: '#9fcf3f', blue: '#52b0dc', red: '#f05d4e',
+  engine: '#81b64c', engineHover: '#81b64c',
+};
+const OPACITY = { engine: 0.8, engineHover: 0.45 };
+const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+overlay.setAttribute('viewBox', '0 0 800 800');
+overlay.id = 'overlay';
+$('#boardWrap').appendChild(overlay);
+// square highlights go in a second layer underneath the pieces
+const underlay = overlay.cloneNode();
+underlay.id = 'underlay';
+$('#boardWrap').appendChild(underlay);
+
+let engineShapes = [];   // best-move arrows from Stockfish
+let preview = null;      // the arrow you're dragging right now
+let dragStart = null;
+
+function squareCenter(sq) {
+  const file = 'abcdefgh'.indexOf(sq[0]), rank = Number(sq[1]);
+  const white = cg.state.orientation === 'white';
+  return {
+    x: ((white ? file : 7 - file) + 0.5) * 100,
+    y: ((white ? 8 - rank : rank - 1) + 0.5) * 100,
+  };
+}
+
+function squareAt(e) {
+  const r = $('#board').getBoundingClientRect();
+  const col = Math.floor(((e.clientX - r.left) / r.width) * 8);
+  const row = Math.floor(((e.clientY - r.top) / r.height) * 8);
+  if (col < 0 || col > 7 || row < 0 || row > 7) return null;
+  const white = cg.state.orientation === 'white';
+  const file = white ? col : 7 - col, rank = white ? 8 - row : row + 1;
+  return 'abcdefgh'[file] + rank;
+}
+
+// Straight arrow from p to the tip q, as one polygon
+function arrowPolygon(p, q, startAtP) {
+  const W = 22, HEAD_W = 52, HEAD_L = 42, PULL = 12;
+  const len = Math.hypot(q.x - p.x, q.y - p.y);
+  const dx = (q.x - p.x) / len, dy = (q.y - p.y) / len;
+  const nx = -dy, ny = dx;
+  const tip = { x: q.x - dx * PULL, y: q.y - dy * PULL };
+  const start = startAtP ? p : { x: p.x + dx * 12, y: p.y + dy * 12 };
+  const base = { x: tip.x - dx * HEAD_L, y: tip.y - dy * HEAD_L };
+  const pts = [
+    [start.x + nx * W / 2, start.y + ny * W / 2], [base.x + nx * W / 2, base.y + ny * W / 2],
+    [base.x + nx * HEAD_W / 2, base.y + ny * HEAD_W / 2], [tip.x, tip.y],
+    [base.x - nx * HEAD_W / 2, base.y - ny * HEAD_W / 2], [base.x - nx * W / 2, base.y - ny * W / 2],
+    [start.x - nx * W / 2, start.y - ny * W / 2],
+  ];
+  return `<polygon points="${pts.map(p => p.join(',')).join(' ')}"/>`;
+}
+
+function shapeSvg(shape) {
+  const color = COLORS[shape.color] || COLORS.orange;
+  const opacity = OPACITY[shape.color] || 0.8;
+  const a = squareCenter(shape.from);
+  if (!shape.to || shape.to === shape.from) {
+    return `<rect x="${a.x - 50}" y="${a.y - 50}" width="100" height="100" fill="${color}" opacity="${opacity * 0.85}"/>`;
+  }
+  const b = squareCenter(shape.to);
+  const cols = Math.abs(b.x - a.x) / 100, rows = Math.abs(b.y - a.y) / 100;
+  let body;
+  if ((cols === 1 && rows === 2) || (cols === 2 && rows === 1)) {
+    // knight move: L-shaped arrow, long leg first
+    const corner = rows === 2 ? { x: a.x, y: b.y } : { x: b.x, y: a.y };
+    const W = 22;
+    const x1 = Math.min(a.x, corner.x), x2 = Math.max(a.x, corner.x);
+    const y1 = Math.min(a.y, corner.y), y2 = Math.max(a.y, corner.y);
+    const leg = rows === 2
+      ? `<rect x="${x1 - W / 2}" y="${y1 - W / 2}" width="${W}" height="${y2 - y1 + W}"/>`
+      : `<rect x="${x1 - W / 2}" y="${y1 - W / 2}" width="${x2 - x1 + W}" height="${W}"/>`;
+    body = leg + arrowPolygon(corner, b, true);
+  } else {
+    body = arrowPolygon(a, b, false);
+  }
+  return `<g fill="${color}" opacity="${opacity}">${body}</g>`;
+}
+
+function drawOverlay() {
+  const shapes = [...engineShapes, ...((cur && cur.shapes) || [])];
+  if (preview) shapes.push(preview);
+  const isSquare = s => !s.to || s.to === s.from;
+  underlay.innerHTML = shapes.filter(isSquare).map(shapeSvg).join('');
+  overlay.innerHTML = shapes.filter(s => !isSquare(s)).map(shapeSvg).join('');
+}
+
+function brushFor(e) {
+  if (e.shiftKey && e.altKey) return 'red';
+  if (e.shiftKey) return 'green';
+  if (e.altKey) return 'blue';
+  return 'orange';
+}
+
+// Right-click and drag to draw. Capture phase, so the board never sees right-clicks.
+$('#boardWrap').addEventListener('mousedown', e => {
+  if (e.button === 2) {
+    e.stopPropagation(); e.preventDefault();
+    const sq = squareAt(e);
+    if (!sq) return;
+    dragStart = sq;
+    preview = { from: sq, to: null, color: brushFor(e) };
+    drawOverlay();
+  } else if (e.button === 0 && cur && cur.shapes.length) {
+    cur.shapes = [];  // left click clears your arrows, like chess.com
+    drawOverlay();
+  }
+}, true);
+
+window.addEventListener('mousemove', e => {
+  if (!dragStart) return;
+  const sq = squareAt(e);
+  if (sq && sq !== preview.to) {
+    preview = { from: dragStart, to: sq === dragStart ? null : sq, color: brushFor(e) };
+    drawOverlay();
+  }
+});
+
+window.addEventListener('mouseup', e => {
+  if (e.button !== 2 || !dragStart) return;
+  const sq = squareAt(e) || preview.to || dragStart;
+  const shape = { from: dragStart, to: sq === dragStart ? null : sq, color: brushFor(e) };
+  // drawing the same arrow again removes it; a different color replaces it
+  const same = s => s.from === shape.from && (s.to || null) === shape.to;
+  const existing = cur.shapes.find(same);
+  cur.shapes = cur.shapes.filter(s => !same(s));
+  if (!existing || existing.color !== shape.color) cur.shapes.push(shape);
+  dragStart = null;
+  preview = null;
+  drawOverlay();
+});
+$('#boardWrap').addEventListener('contextmenu', e => e.preventDefault());
 
 function legalDests(chess) {
   const dests = new Map();
@@ -131,7 +257,7 @@ $('#startBtn').onclick = toStart;
 $('#backBtn').onclick = back;
 $('#nextBtn').onclick = next;
 $('#endBtn').onclick = toEnd;
-$('#flipBtn').onclick = () => { cg.toggleOrientation(); updateEvalBarSide(); };
+$('#flipBtn').onclick = () => { cg.toggleOrientation(); updateEvalBarSide(); drawOverlay(); };
 $('#backToGameBtn').onclick = backToGame;
 $('#deleteLineBtn').onclick = deleteLine;
 $('#showArrows').onchange = () => drawEngineArrows();
@@ -142,7 +268,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') { next(); e.preventDefault(); }
   if (e.key === 'Home' || e.key === 'ArrowUp') { toStart(); e.preventDefault(); }
   if (e.key === 'End' || e.key === 'ArrowDown') { toEnd(); e.preventDefault(); }
-  if (e.key === 'f') { cg.toggleOrientation(); updateEvalBarSide(); }
+  if (e.key === 'f') { cg.toggleOrientation(); updateEvalBarSide(); drawOverlay(); }
 });
 
 // ---------- Rendering ----------
@@ -156,18 +282,94 @@ function update() {
     check: chess.inCheck(),
     movable: { color: chess.isGameOver() ? undefined : turn, dests: legalDests(chess) },
   });
-  cg.setShapes(cur.shapes || []);
-  cg.setAutoShapes([]);
+  engineShapes = [];
+  drawOverlay();
+  historyTab = null;  // pick the history tab automatically for each position
 
   renderMoveList();
   renderStatus(chess);
   renderReview();
   renderVariation();
+  renderOpening();
 
-  clearTimeout(analysisTimer);
+  // stop the old search right away; start the new one after a tiny pause so
+  // holding down the arrow keys doesn't start dozens of searches
+  stopAnalysis();
+  hoveredLine = undefined;
   $('#lines').innerHTML = '<span class="muted">Thinking...</span>';
-  analysisTimer = setTimeout(requestAnalysis, 200);
+  $('#depth').textContent = '';
+  clearTimeout(analysisTimer);
+  analysisTimer = setTimeout(() => { requestAnalysis(); requestHistory(); }, 40);
 }
+
+// ---------- Your games from this position ----------
+let history = null;         // last result from the server
+let historyTab = null;      // 'mine' | 'opponents' (null = pick automatically)
+let historyId = 0;
+
+function myColorHere() {
+  return gameData ? gameData.my_color : cg.state.orientation;
+}
+
+async function requestHistory() {
+  const id = ++historyId;
+  const node = cur;
+  try {
+    const res = await fetch('/api/position-stats?fen=' + encodeURIComponent(node.fen));
+    const data = await res.json();
+    if (id !== historyId || node !== cur) return;
+    history = data;
+    renderHistory();
+  } catch (e) {
+    if (id === historyId) $('#historyBox').textContent = 'Could not load your games for this position.';
+  }
+}
+
+function renderHistory() {
+  if (!history || history.error) return;
+  // default tab: your moves when it's your turn, otherwise your opponents'
+  const tab = historyTab || (history.to_move === myColorHere() ? 'mine' : 'opponents');
+  const rows = history[tab] || [];
+  const total = rows.reduce((n, m) => n + m.games, 0);
+  $('#tabMine').textContent = `Your moves (${(history.mine || []).reduce((n, m) => n + m.games, 0)})`;
+  $('#tabOpp').textContent = `Opponents' moves (${(history.opponents || []).reduce((n, m) => n + m.games, 0)})`;
+  $('#tabMine').classList.toggle('active', tab === 'mine');
+  $('#tabOpp').classList.toggle('active', tab === 'opponents');
+
+  if (!rows.length) {
+    $('#historyBox').innerHTML = tab === 'mine'
+      ? "You haven't had this position with this side to move."
+      : 'No opponent has played a move against you from this position.';
+    return;
+  }
+  const pct = (n, d) => Math.round((100 * n) / d);
+  const seg = (cls, n, games) => {
+    const p = pct(n, games);
+    return p ? `<span class="${cls}" style="width:${p}%">${p >= 12 ? p + '%' : ''}</span>` : '';
+  };
+  const body = rows.map(m => `
+    <tr data-uci="${m.uci || ''}">
+      <td class="mvname">${m.move}</td>
+      <td class="num">${m.games}<span class="muted"> (${pct(m.games, total)}%)</span></td>
+      <td><div class="wdl" title="${m.win} won, ${m.draw} drawn, ${m.loss} lost">
+        ${seg('w', m.win, m.games)}${seg('d', m.draw, m.games)}${seg('l', m.loss, m.games)}</div></td>
+      <td>${m.verdict ? `<span class="verdict ${m.verdict}">${m.verdict}</span>` : '<span class="muted">-</span>'}</td>
+      <td class="muted">${(m.last || '').replaceAll('.', '-')}</td>
+    </tr>`).join('');
+  $('#historyBox').innerHTML = `<table class="history">
+    <thead><tr><th>Move</th><th>Games</th><th>Your results (W / D / L)</th>
+    <th title="Stockfish's average verdict on this move, from your analyzed games">Engine</th>
+    <th>Last played</th></tr></thead><tbody>${body}</tbody></table>`;
+  $('#historyBox').querySelectorAll('tbody tr').forEach(tr => {
+    tr.onclick = () => {
+      const u = tr.dataset.uci;
+      if (u) playMove(u.slice(0, 2), u.slice(2, 4), u[4]);
+    };
+  });
+}
+
+$('#tabMine').onclick = () => { historyTab = 'mine'; renderHistory(); };
+$('#tabOpp').onclick = () => { historyTab = 'opponents'; renderHistory(); };
 
 function moveNumber(node, force) {
   if (node.ply % 2 === 1) return `<span class="num">${(node.ply + 1) / 2}.</span>`;
@@ -215,8 +417,14 @@ function renderMoveList() {
   box.querySelectorAll('.mv').forEach(el => {
     el.onclick = () => goTo(nodes[el.dataset.id]);
   });
+  // keep the current move visible by scrolling only the move list, not the page
   const current = box.querySelector('.mv.current');
-  if (current) current.scrollIntoView({ block: 'nearest' });
+  if (current) {
+    const top = current.offsetTop;
+    if (top < box.scrollTop) box.scrollTop = top - 8;
+    else if (top + current.offsetHeight > box.scrollTop + box.clientHeight)
+      box.scrollTop = top + current.offsetHeight - box.clientHeight + 8;
+  }
 }
 
 function renderStatus(chess) {
@@ -299,8 +507,8 @@ function formatScore(line) {
   return (line.cp >= 0 ? '+' : '') + (line.cp / 100).toFixed(2);
 }
 
-function arrowFor(uci, brush) {
-  return { orig: uci.slice(0, 2), dest: uci.slice(2, 4), brush };
+function arrowFor(uci, color) {
+  return { from: uci.slice(0, 2), to: uci.slice(2, 4), color };
 }
 
 function drawEngineArrows(hoverIndex) {
@@ -309,37 +517,54 @@ function drawEngineArrows(hoverIndex) {
   if (hoverIndex !== undefined && hoverIndex > 0 && engineLines[hoverIndex])
     shapes.push(arrowFor(engineLines[hoverIndex].first_uci, 'engineHover'));
   if (hoverIndex === 0 && !$('#showArrows').checked) shapes.push(arrowFor(engineLines[0].first_uci, 'engine'));
-  cg.setAutoShapes(shapes);
+  engineShapes = shapes;
+  drawOverlay();
 }
 
 function updateEvalBarSide() {
   $('#evalBar').classList.toggle('flipped', cg.state.orientation === 'black');
 }
 
-async function requestAnalysis() {
-  const id = ++analysisId;
-  const node = cur;
-  let data;
-  try {
-    const res = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: node.fen }),
-    });
-    data = await res.json();
-  } catch (e) {
-    if (id === analysisId) $('#lines').textContent = 'Could not reach the server. Is server.py running?';
-    return;
-  }
-  if (id !== analysisId || node !== cur) return;  // you've moved on since
+// Live analysis: the server streams Stockfish's lines as it searches deeper.
+let stream = null;
+let hoveredLine;
 
-  if (data.game_over) {
-    engineLines = [];
-    cg.setAutoShapes([]);
-    $('#lines').textContent = 'Game over: ' + data.game_over;
-    return;
-  }
-  engineLines = data.lines || [];
+function stopAnalysis() {
+  if (stream) { stream.close(); stream = null; }
+}
+
+function requestAnalysis() {
+  stopAnalysis();
+  const node = cur;
+  const es = new EventSource('/api/analyze/stream?fen=' + encodeURIComponent(node.fen));
+  stream = es;
+  let gotAny = false;
+  es.onmessage = ev => {
+    if (es !== stream || node !== cur) { es.close(); return; }
+    const data = JSON.parse(ev.data);
+    gotAny = true;
+    if (data.game_over) {
+      es.close();
+      engineLines = [];
+      engineShapes = [];
+      drawOverlay();
+      $('#depth').textContent = '';
+      $('#lines').textContent = 'Game over: ' + data.game_over;
+      return;
+    }
+    if (data.done) es.close();  // finished searching; don't let the browser reconnect
+    showLines(data.lines || [], data.depth, data.done);
+  };
+  es.onerror = () => {
+    es.close();
+    if (es === stream && !gotAny)
+      $('#lines').textContent = 'Could not reach the server. Is server.py running?';
+  };
+}
+
+function showLines(lines, depth, done) {
+  engineLines = lines;
+  $('#depth').textContent = depth ? `depth ${depth}${done ? '' : '...'}` : '';
   const box = $('#lines');
   box.innerHTML = engineLines.map((l, i) =>
     `<div class="line" data-i="${i}"><span class="score">${formatScore(l)}</span>${l.san}</div>`
@@ -350,10 +575,10 @@ async function requestAnalysis() {
       const u = engineLines[i].first_uci;
       playMove(u.slice(0, 2), u.slice(2, 4), u[4]);
     };
-    el.onmouseenter = () => drawEngineArrows(i);
-    el.onmouseleave = () => drawEngineArrows();
+    el.onmouseenter = () => { hoveredLine = i; drawEngineArrows(i); };
+    el.onmouseleave = () => { hoveredLine = undefined; drawEngineArrows(); };
   });
-  drawEngineArrows();
+  drawEngineArrows(hoveredLine);
 
   const top = engineLines[0];
   if (top) {
@@ -362,6 +587,174 @@ async function requestAnalysis() {
     $('#evalText').textContent = formatScore(top).replace('+', '');
   }
 }
+
+// ---------- Openings ----------
+let openingNames = {};    // position -> {name, eco, family}
+let studyLine = null;     // the opening line you loaded from the explorer
+let explorerState = { view: 'families', family: null };
+let familiesCache = null;
+const posKey = fen => fen.split(' ').slice(0, 4).join(' ');
+
+function currentOpening() {
+  // the deepest named position on the way to the current one
+  for (let n = cur; n; n = n.parent) {
+    const o = openingNames[posKey(n.fen)];
+    if (o) return { ...o, key: posKey(n.fen) };
+  }
+  return null;
+}
+
+function renderOpening() {
+  const box = $('#openingName');
+  const o = currentOpening();
+  let html = o
+    ? `<a id="openingLink">${o.name}</a><span class="eco">${o.eco}</span>`
+    : (cur && cur.ply > 0 ? '<span class="muted">Unnamed position</span>' : '');
+  if (studyLine) {
+    html += `<div class="studyBar muted">Studying this line. Press Start, then Next, to step through it.
+      <a id="backToFamily">See all ${studyLine.family} lines</a></div>`;
+  }
+  box.innerHTML = html;
+  const link = $('#openingLink');
+  if (link) link.onclick = () => openExplorer(o.family);
+  const back = $('#backToFamily');
+  if (back) back.onclick = () => openExplorer(studyLine.family);
+}
+
+function wdlBar(m) {
+  if (!m.games) return '';
+  const pct = n => Math.round((100 * n) / m.games);
+  return `<div class="wdl" title="${m.win} won, ${m.draw} drawn, ${m.loss} lost">`
+    + (m.win ? `<span class="w" style="width:${pct(m.win)}%"></span>` : '')
+    + (m.draw ? `<span class="d" style="width:${pct(m.draw)}%"></span>` : '')
+    + (m.loss ? `<span class="l" style="width:${pct(m.loss)}%"></span>` : '') + '</div>';
+}
+
+function opRow(r, opts = {}) {
+  const tree = opts.depth ? '<span class="opTree">\u2514</span>' : '';
+  const indent = Math.min(opts.depth || 0, 7) * 14;
+  const moves = opts.depth ? `<b>${r.new}</b>` : r.moves;
+  const games = r.mine.games
+    ? `You: ${r.mine.games} game${r.mine.games > 1 ? 's' : ''}${wdlBar(r.mine)}`
+    : '<span style="opacity:.6">Not in your games</span>';
+  return `<div class="opRow${opts.here ? ' here' : ''}" data-i="${opts.index}" style="padding-left:${6 + indent}px">
+    <div class="opMain">
+      <div class="opName">${tree}${opts.title}</div>
+      <div class="opMoves" title="${r.moves}">${r.eco ? r.eco + ' \u00b7 ' : ''}${moves}</div>
+    </div>
+    <div class="opMeta">${opts.extra || ''}${games}</div>
+  </div>`;
+}
+
+function setExplorerOpen(open) {
+  $('#explorerView').style.display = open ? 'block' : 'none';
+  $('#analysisView').style.display = open ? 'none' : 'block';
+  $('#openingsBtn').classList.toggle('active', open);
+}
+
+async function openExplorer(family) {
+  setExplorerOpen(true);
+  if (family) await showFamily(family);
+  else await showFamilies();
+}
+
+async function showFamilies() {
+  explorerState = { view: 'families', family: null };
+  $('#explorerTitle').textContent = 'Opening explorer';
+  $('#explorerNav').innerHTML = '<span class="muted">All openings, the ones you play most first.</span>';
+  $('#openingSearch').style.display = 'block';
+  const list = $('#explorerList');
+  if (!familiesCache) {
+    list.innerHTML = '<span class="muted">Loading openings...</span>';
+    familiesCache = await (await fetch('/api/openings/families')).json();
+  }
+  renderFamilyList();
+}
+
+function renderFamilyList() {
+  const q = $('#openingSearch').value.trim().toLowerCase();
+  const fams = familiesCache.filter(f => !q || q.split(/\s+/).every(w => f.family.toLowerCase().includes(w)));
+  const list = $('#explorerList');
+  list.innerHTML = fams.map((f, i) => opRow(f, {
+    index: i, title: f.family,
+    extra: `<div>${f.variations} line${f.variations > 1 ? 's' : ''}</div>`,
+  })).join('') + (q ? '<div id="variationHits"></div>' : '');
+  list.querySelectorAll('.opRow').forEach(el => {
+    el.onclick = () => showFamily(fams[Number(el.dataset.i)].family);
+  });
+  if (q) searchVariations(q, fams.length);
+}
+
+let searchId = 0;
+async function searchVariations(q, familyCount) {
+  const id = ++searchId;
+  const hits = await (await fetch('/api/openings/search?q=' + encodeURIComponent(q))).json();
+  if (id !== searchId || !$('#variationHits')) return;
+  if (!hits.length) {
+    if (!familyCount) $('#variationHits').innerHTML = '<div class="muted">No openings match that.</div>';
+    return;
+  }
+  $('#variationHits').innerHTML = '<h2 style="margin-top:14px">Matching lines</h2>'
+    + hits.map((h, i) => opRow(h, { index: i, title: h.name })).join('');
+  $('#variationHits').querySelectorAll('.opRow').forEach(el => {
+    el.onclick = () => loadLine(hits[Number(el.dataset.i)]);
+  });
+}
+$('#openingSearch').oninput = () => { if (explorerState.view === 'families' && familiesCache) renderFamilyList(); };
+
+async function showFamily(name) {
+  explorerState = { view: 'family', family: name };
+  $('#explorerTitle').textContent = name;
+  $('#explorerNav').innerHTML = '<a id="allOpenings">\u2190 All openings</a>';
+  $('#allOpenings').onclick = showFamilies;
+  $('#openingSearch').style.display = 'none';
+  const list = $('#explorerList');
+  list.innerHTML = '<span class="muted">Loading lines...</span>';
+  const data = await (await fetch('/api/openings/family?name=' + encodeURIComponent(name))).json();
+  if (explorerState.family !== name) return;
+  const here = currentOpening();
+  list.innerHTML = '<div class="muted" style="margin-bottom:6px">Click a line to load it on the board.</div>'
+    + data.lines.map((r, i) => opRow(r, {
+      index: i, depth: r.depth, here: here && here.key === r.key,
+      title: r.variation,
+    })).join('');
+  list.querySelectorAll('.opRow').forEach(el => {
+    el.onclick = () => loadLine(data.lines[Number(el.dataset.i)]);
+  });
+  // scroll the list (not the page) to the line you're on
+  const hereRow = list.querySelector('.opRow.here');
+  if (hereRow) list.scrollTop = hereRow.offsetTop - list.clientHeight / 2;
+}
+
+// Load an opening line onto the board as something to study
+function loadLine(line) {
+  const chess = new Chess();
+  const moves = [];
+  for (const san of line.san) {
+    const m = chess.move(san);
+    moves.push({ san: m.san, from: m.from, to: m.to, promotion: m.promotion, fen: chess.fen() });
+  }
+  gameData = null;
+  reviews = [];
+  studyLine = { name: line.name, family: line.family || line.name.split(':')[0] };
+  $('#gameSelect').value = '';
+  buildTree(START_FEN, moves);
+  Object.values(nodes).forEach(n => { n.gameIndex = null; });
+  let end = root;
+  while (end.children.length) end = end.children[0];
+  cur = end;
+  $('#gameTitle').textContent = line.name;
+  renderSummary();
+  setExplorerOpen(false);
+  update();
+}
+
+$('#openingsBtn').onclick = () => {
+  if ($('#explorerView').style.display === 'block') { setExplorerOpen(false); return; }
+  const o = currentOpening();
+  openExplorer(o ? o.family : null);
+};
+$('#closeExplorerBtn').onclick = () => setExplorerOpen(false);
 
 // ---------- Loading games ----------
 async function loadGames() {
@@ -373,6 +766,8 @@ async function loadGames() {
 }
 
 async function loadGame(id) {
+  historyTab = null;
+  studyLine = null;
   if (!id) {
     gameData = null;
     reviews = [];
@@ -431,6 +826,7 @@ async function pollSync() {
 $('#syncBtn').onclick = syncGames;
 
 // ---------- Start ----------
+fetch('/api/openings/names').then(r => r.json()).then(n => { openingNames = n; renderOpening(); });
 await loadGames();
 await loadGame('');
 syncGames();

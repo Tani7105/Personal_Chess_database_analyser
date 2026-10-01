@@ -41,6 +41,24 @@ def create_tables(conn):
     );
     CREATE INDEX IF NOT EXISTS idx_fen ON positions(fen);
     """)
+    migrate(conn)
+
+def position_key(fen):
+    """The position without the move counters, so the same position reached
+    at a different move number (or by a different move order) still matches."""
+    return " ".join(fen.split()[:4])
+
+def migrate(conn):
+    """Add the pos_key column and indexes to databases created before they existed."""
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(positions)")]
+    if "pos_key" not in cols:
+        conn.execute("ALTER TABLE positions ADD COLUMN pos_key TEXT")
+    if conn.execute("SELECT 1 FROM positions WHERE pos_key IS NULL LIMIT 1").fetchone():
+        conn.create_function("position_key", 1, position_key, deterministic=True)
+        conn.execute("UPDATE positions SET pos_key = position_key(fen) WHERE pos_key IS NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pos_key ON positions(pos_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_game_ply ON positions(game_id, ply)")
+    conn.commit()
 
 def insert_game(conn, game):
     """Store one parsed game and its positions. Returns the new game id,
@@ -63,9 +81,10 @@ def insert_game(conn, game):
     game_id = cur.lastrowid
     board = game.board()
     for ply, move in enumerate(game.mainline_moves(), start=1):
+        fen = board.fen()
         conn.execute(
-            "INSERT INTO positions (game_id, ply, fen, move_played) VALUES (?, ?, ?, ?)",
-            (game_id, ply, board.fen(), board.san(move)))
+            "INSERT INTO positions (game_id, ply, fen, pos_key, move_played) VALUES (?, ?, ?, ?, ?)",
+            (game_id, ply, fen, position_key(fen), board.san(move)))
         board.push(move)
     return game_id
 
