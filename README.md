@@ -4,7 +4,7 @@ I didn't want to pay for chess.com premium just to find out where my games went 
 
 It pulls my games from chess.com, stores every position in a local database and runs Stockfish over them. What I get back is a board I can actually think on: a game review, my own side lines, arrows, an opening explorer, and a record of what I've played in every position I've reached. It all runs on my laptop. The only thing it talks to online is chess.com's public API.
 
-**[Try the live demo](https://tani7105.github.io/Personal_Chess_database_anaylser/)**. It has 40 of my recent games, and Stockfish runs right in your browser.
+**[Try the live demo](https://tani7105.github.io/Personal_Chess_database_analyser/)**. It has 40 of my recent games, and Stockfish runs right in your browser.
 
 ![Screenshot](docs/screenshot.png)
 
@@ -40,8 +40,8 @@ Python, Flask, SQLite, Stockfish, python-chess, Chessground (the board lichess u
 You need Python 3.10+ and Stockfish (`brew install stockfish` on a Mac).
 
 ```
-git clone https://github.com/Tani7105/Personal_Chess_database_anaylser.git
-cd Personal_Chess_database_anaylser
+git clone https://github.com/Tani7105/Personal_Chess_database_analyser.git
+cd Personal_Chess_database_analyser
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

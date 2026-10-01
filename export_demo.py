@@ -20,7 +20,7 @@ from database import DB_PATH, USERNAME
 STATIC = "static"
 FILES_FROM_STATIC = ["app.js"]
 VENDOR = os.path.join(STATIC, "vendor")
-REPO_URL = "https://github.com/Tani7105/Personal_Chess_database_anaylser"
+REPO_URL = "https://github.com/Tani7105/Personal_Chess_database_analyser"
 
 
 def write_json(path, data):
