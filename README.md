@@ -4,6 +4,8 @@ I didn't want to pay for chess.com premium just to find out where my games went 
 
 It pulls my games from chess.com, stores every position in a local database and runs Stockfish over them. What I get back is a board I can actually think on: a game review, my own side lines, arrows, an opening explorer, and a record of what I've played in every position I've reached. It all runs on my laptop. The only thing it talks to online is chess.com's public API.
 
+**[Try the live demo](https://tani7105.github.io/Personal_Chess_database_anaylser/)**. It has 40 of my recent games, and Stockfish runs right in your browser.
+
 ![Screenshot](docs/screenshot.png)
 
 ## What it does
@@ -54,7 +56,9 @@ python analyze.py 100 4  # analyze your 100 newest games on 4 CPU cores
 python server.py         # open http://localhost:5050
 ```
 
-After that, the Sync button (or `python update.py`) pulls in new games. To sync every hour on a Mac, fix the paths in `com.godlike7105.chessdb.plist`, copy it to `~/Library/LaunchAgents/` and load it with `launchctl bootstrap gui/$(id -u) <path to the plist>`.
+After that, the Sync button (or `python update.py`) pulls in new games.
+
+To rebuild the public demo, run `python export_demo.py`. It writes a static copy of the app into `docs/` with a sample of games, opponents' names replaced by "Opponent", and the browser build of Stockfish, which GitHub Pages serves as-is. To sync every hour on a Mac, fix the paths in `com.godlike7105.chessdb.plist`, copy it to `~/Library/LaunchAgents/` and load it with `launchctl bootstrap gui/$(id -u) <path to the plist>`.
 
 ## Files
 
@@ -65,10 +69,13 @@ After that, the Sync button (or `python update.py`) pulls in new games. To sync 
 | `update.py` | Fetches recent games, imports new ones and analyzes them |
 | `fetch.py`, `database.py` | Full history download and the database schema |
 | `analyze.py` | Batch Stockfish analysis |
+| `insights.py` | Game reviews, position history and opening stats, shared by the server and the demo |
+| `export_demo.py`, `docs/` | Builds the public demo site, and the built site itself |
+| `static/api.js`, `static/api-demo.js` | How the board gets its data: from the server, or from the demo's files plus in-browser Stockfish |
 | `blunders.py` | Move scoring (win probability), also usable from the command line |
 | `openings.py`, `openings/` | Opening names and the variation tree |
 | `app.py` | My first viewer, built with Streamlit, before the current board |
 
 ## Credits
 
-Stockfish and Chessground are GPL-3.0, chess.js is BSD-2-Clause, and the lichess opening list is public domain (CC0). Their license files are in `static/vendor/` and `openings/`.
+Stockfish (native, and the browser build from [stockfish.js](https://github.com/nmrugg/stockfish.js)) and Chessground are GPL-3.0, chess.js is BSD-2-Clause, and the lichess opening list is public domain (CC0). Their license files are in `static/vendor/` and `openings/`.

@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chess Analyzer</title>
-<link rel="stylesheet" href="/static/vendor/chessground.base.css">
-<link rel="stylesheet" href="/static/vendor/chessground.brown.css">
-<link rel="stylesheet" href="/static/vendor/chessground.cburnett.css">
+<link rel="stylesheet" href="./vendor/chessground.base.css">
+<link rel="stylesheet" href="./vendor/chessground.brown.css">
+<link rel="stylesheet" href="./vendor/chessground.cburnett.css">
 <style>
   :root {
     --bg: #262421; --panel: #302e2b; --panel2: #3a3835; --text: #e8e6e3;
@@ -162,6 +162,8 @@
     table.history th:nth-child(5), table.history td:nth-child(5) { display: none; }
     .wdl { min-width: 70px; }
   }
+  .demoBanner { background: #3d4a2c; color: #e4ecd8; font-size: 13px; padding: 7px 20px; }
+  .demoBanner a { color: #fff; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -174,6 +176,7 @@
   <button id="openingsBtn" class="headerBtn">Openings</button>
 </header>
 
+<div class="demoBanner">Live demo with a sample of my games. Stockfish runs in your browser, so analysis starts after a short download. <a href="https://github.com/Tani7105/Personal_Chess_database_anaylser">Source on GitHub</a></div>
 <main>
   <section id="boardArea">
     <div id="boardRow">
@@ -247,6 +250,6 @@
   </section>
 </main>
 
-<script type="module" src="/static/app.js"></script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>
